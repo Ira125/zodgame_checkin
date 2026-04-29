@@ -4,6 +4,11 @@ import re
 import sys
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer,encoding='utf-8')
 
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime
+
 import undetected_chromedriver as uc
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By
@@ -113,7 +118,54 @@ def zodgame_task(driver, formhash):
 
     return success
 
-def zodgame(cookie_string):
+def fetch_titles(driver):
+    driver.get("https://zodgame.xyz/forum.php?mod=forumdisplay&fid=13")
+    WebDriverWait(driver, 240).until(
+        lambda x: x.title != "Just a moment..."
+    )
+
+    titles = []
+    # Skip sticky threads (置顶/公告), only collect normal threads below "版块主题" separator
+    xpath = '//tbody[starts-with(@id, "normalthread_")]//th//a[@class="s xst"]'
+    elems = driver.find_elements(By.XPATH, xpath)
+    for a in elems:
+        title = a.get_attribute("textContent").strip()
+        link = a.get_attribute("href")
+        if title:
+            titles.append((title, link))
+
+    print(f"【爬取】共获取 {len(titles)} 条帖子标题。")
+    return titles
+
+
+def send_email(titles, email_user, email_pass):
+    today = datetime.now().strftime("%Y-%m-%d")
+    subject = f"ZodGame 帖子速递 - {today}"
+
+    body_html = f'<h2>绅士游戏集散地 - {today} 帖子速递</h2><hr><ol>'
+    for title, link in titles:
+        body_html += f'<li><a href="{link}">{title}</a></li>'
+    body_html += '</ol>'
+
+    body_plain = f"绅士游戏集散地 - {today}\n{'-'*50}\n"
+    for i, (title, link) in enumerate(titles, 1):
+        body_plain += f"{i}. {title}\n   {link}\n"
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = email_user
+    msg["To"] = email_user
+    msg.attach(MIMEText(body_plain, "plain", "utf-8"))
+    msg.attach(MIMEText(body_html, "html", "utf-8"))
+
+    with smtplib.SMTP_SSL("smtp.163.com", 465) as server:
+        server.login(email_user, email_pass)
+        server.sendmail(email_user, email_user, msg.as_string())
+
+    print(f"【邮件】已发送至 {email_user}。")
+
+
+def zodgame(cookie_string, email_user=None, email_pass=None):
     options = uc.ChromeOptions()
     options.add_argument("--disable-popup-blocking")
     driver = uc.Chrome(driver_executable_path = """C:\SeleniumWebDrivers\ChromeDriver\chromedriver.exe""",
@@ -153,11 +205,18 @@ def zodgame(cookie_string):
     ).get_attribute('value')
     assert zodgame_checkin(driver, formhash) and zodgame_task(driver, formhash), "Checkin failed or task failed."
 
+    if email_user and email_pass:
+        titles = fetch_titles(driver)
+        send_email(titles, email_user, email_pass)
+
     driver.close()
     driver.quit()
     
 if __name__ == "__main__":
     cookie_string = sys.argv[1]
     assert cookie_string
-    
-    zodgame(cookie_string)
+
+    email_user = sys.argv[2] if len(sys.argv) > 2 else None
+    email_pass = sys.argv[3] if len(sys.argv) > 3 else None
+
+    zodgame(cookie_string, email_user, email_pass)
